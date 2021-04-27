@@ -4,8 +4,6 @@ import {
 } from "https://deno.land/std@0.95.0/mime/multipart.ts";
 import {
   readableStreamFromIterable,
-  readableStreamFromReader,
-  readerFromStreamReader,
 } from "https://deno.land/std@0.95.0/io/streams.ts";
 
 interface BytesMessage {
@@ -45,7 +43,9 @@ export function streamFromMultipart(
   // ReadableStream.
   const multipartWriter = new MultipartWriter({
     write(buffer: Uint8Array): Promise<number> {
-      channel.push({ type: "bytes", buffer });
+      // It is VERY important we close the buffer, there is no guarentee that the writer won't
+      // re-use this buffer for subsequent writes.
+      channel.push({ type: "bytes", buffer: new Uint8Array(buffer) });
       return Promise.resolve(buffer.length);
     },
   });
@@ -54,7 +54,8 @@ export function streamFromMultipart(
   writerFunction(multipartWriter)
     .then(() => {
       try {
-        multipartWriter.close();
+        // Close is an async function that still writes, so we must wait for it to complete.
+        return multipartWriter.close();
       } catch (_ignored) {
         // We'll try to close the writer incase the user hasn't, if they have the close function
         // will throw an error we'll just ignore.
@@ -77,12 +78,5 @@ export function streamFromMultipart(
     }
   }
 
-  // Yes I know this looks REALLY stupid, but I was having issues where if we used the potentially
-  // broken stream we would send the data out of order. This fixes it but I have no idea why. It
-  // doesn't allocate the entire stream on the heap, so I think this is going to stay for now.
-  const potentiallyBrokenStream = readableStreamFromIterable(generator());
-  const reader = readerFromStreamReader(potentiallyBrokenStream.getReader());
-  const stream = readableStreamFromReader(reader);
-
-  return [stream, multipartWriter.boundary];
+  return [readableStreamFromIterable(generator()), multipartWriter.boundary];
 }
